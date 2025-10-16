@@ -19,17 +19,26 @@
 
 #define EXAMPLE_READ_LEN                    256
 
-static adc_channel_t channel= ADC_CHANNEL_6;
+typedef struct{
+    uint8_t result[EXAMPLE_READ_LEN];
+    uint32_t num;
 
-static TaskHandle_t s_task_handle = NULL;
+}dados;
+
+static adc_channel_t channel= ADC_CHANNEL_6;
+static QueueHandle_t fila_dados;
+
+
+static TaskHandle_t s_task_handle1 = NULL, s_task_handle2 = NULL;
 static const char *TAG = "EXAMPLE";
-static uint8_t result[EXAMPLE_READ_LEN] = {0};
+static dados dado = {0};
 
 static int TENSAO;  
 
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
 void Task_Adc(void *pvParameters);
+void Task_RMS(void *pvParameters);
 
 //PROTÓTIPO DA  CALIBRAÇÃO DO PWM
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle); // ADC calibration init
@@ -37,7 +46,14 @@ static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
 void app_main(void)
 {
-    memset(result, 0xcc, EXAMPLE_READ_LEN);
+    memset(dado.result, 0xcc, EXAMPLE_READ_LEN);
+
+    fila_dados = xQueueCreate(15, sizeof(dados));
+    if (fila_dados == NULL) {
+        printf("Erro ao criar a fila!\n");
+        return;
+    }
+
 
     xTaskCreatePinnedToCore(
         Task_Adc,           // Função da tarefa
@@ -45,8 +61,17 @@ void app_main(void)
         2048,                   // Tamanho da stack (em palavras, não bytes)
         NULL,                   // Parâmetro para a tarefa
         2,                      // Prioridade
-        &s_task_handle,   // Handle da tarefa
+        &s_task_handle1,   // Handle da tarefa
         1                       // Core onde a tarefa será fixada (0 ou 1)
+    );
+     xTaskCreatePinnedToCore(
+        Task_RMS,           // Função da tarefa
+        "TarefaNoCore0",        // Nome da tarefa
+        2048,                   // Tamanho da stack (em palavras, não bytes)
+        NULL,                   // Parâmetro para a tarefa
+        2,                      // Prioridade
+        &s_task_handle2,   // Handle da tarefa
+        0                       // Core onde a tarefa será fixada (0 ou 1)
     );
 
 
@@ -56,7 +81,7 @@ static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_c
     
     BaseType_t mustYield = pdFALSE;
     //Notify that ADC continuous driver has done enough number of conversions
-    vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
+    vTaskNotifyGiveFromISR(s_task_handle1, &mustYield);
 
     return (mustYield == pdTRUE);
 };
@@ -110,21 +135,44 @@ void Task_Adc(void *pvParameters){
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
     ESP_ERROR_CHECK(adc_continuous_start(handle));
 
+    while(1){
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        while(1){
+            ret = adc_continuous_read(handle, dado.result, EXAMPLE_READ_LEN, &ret_num, 0);
+            if (ret == ESP_OK) {
+                ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
+                dado.num=ret_num;
+                if (xQueueSend(fila_dados, &dado, portMAX_DELAY) != pdPASS) {
+                printf("Falha ao enviar para a fila\n");
+                };
+            } else if (ret == ESP_ERR_TIMEOUT) {
+                //We try to read `EXAMPLE_READ_LEN` until API returns timeout, which means there's no available data
+                break;
+            }
+        };
+         vTaskDelay(pdMS_TO_TICKS(1));
+
+    };
+
+    ESP_ERROR_CHECK(adc_continuous_stop(handle));
+    ESP_ERROR_CHECK(adc_continuous_deinit(handle));
+};
+
+void Task_RMS(void *pvParameters){
+
+    dados recebido;
+
     //-------------ADC1 Calibration Init---------------//
     adc_cali_handle_t adc1_cali_chan6_handle = NULL;    // ADC1 Calibration handle
     bool do_calibration1_chan6 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_6, &adc1_cali_chan6_handle); // ADC1 Calibration Init
 
     while(1){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        while(1){
-            ret = adc_continuous_read(handle, result, EXAMPLE_READ_LEN, &ret_num, 0);
-            if (ret == ESP_OK) {
-                ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
-
-            for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
+        if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS) {
+             for (int i = 0; i <recebido.num; i += SOC_ADC_DIGI_RESULT_BYTES) {
                 // Cast direto para acessar a amostra correta
-                const adc_digi_output_data_t *p = (const adc_digi_output_data_t *)(&result[i]);
+                const adc_digi_output_data_t *p = (const adc_digi_output_data_t *)(&recebido.result[i]);
                 if (p->type1.channel < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1)) {
                     ESP_LOGI(TAG, "Channel: %d, Value: %d",
                             p->type1.channel,
@@ -136,31 +184,21 @@ void Task_Adc(void *pvParameters){
                              ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
 
-                        
+                vTaskDelay(pdMS_TO_TICKS(1));
                 } else {
                     ESP_LOGW(TAG, "Invalid data [Ch%d_%d]",
                             p->type1.channel,
                             p->type1.data);
                 }
             }
-
-                vTaskDelay(1);
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                //We try to read `EXAMPLE_READ_LEN` until API returns timeout, which means there's no available data
-                break;
-            }
-
-        };
-
-    };
-
-    ESP_ERROR_CHECK(adc_continuous_stop(handle));
-    ESP_ERROR_CHECK(adc_continuous_deinit(handle));
-
+        }
+    }
+    
     if (do_calibration1_chan6)                                      // ADC1 Calibration Deinit
     {
         example_adc_calibration_deinit(adc1_cali_chan6_handle);     // ADC1 Calibration Deinit
     }
+    
 };
 
 // DECLARAÇÃO DAS FUNÇÕES DE CALIBRAÇÃO DO ADC
