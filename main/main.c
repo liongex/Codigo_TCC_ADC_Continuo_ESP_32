@@ -2,12 +2,16 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <math.h>
+
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+
 #include "esp_err.h"
 #include "esp_log.h"
+
 #include "esp_adc/adc_continuous.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -17,7 +21,7 @@
 #define EXAMPLE_ADC_ATTEN                   ADC_ATTEN_DB_6
 #define EXAMPLE_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH
 
-#define EXAMPLE_READ_LEN                    256
+#define EXAMPLE_READ_LEN                    600
 
 typedef struct{
     uint8_t result[EXAMPLE_READ_LEN];
@@ -25,13 +29,20 @@ typedef struct{
 
 }dados;
 
-static adc_channel_t channel= ADC_CHANNEL_6;
+typedef struct{
+    float dados_tensao1[100];
+    float dados_tensao2[100];
+    float dados_tensao3[100];
+}Valor_tensao;
+
+static adc_channel_t channel[3]= {ADC_CHANNEL_6, ADC_CHANNEL_7, ADC_CHANNEL_4};
 static QueueHandle_t fila_dados;
 
 
 static TaskHandle_t s_task_handle1 = NULL, s_task_handle2 = NULL;
 static const char *TAG = "EXAMPLE";
 static dados dado = {0};
+static Valor_tensao dados_tensao = {0};
 
 static int TENSAO;  
 
@@ -39,6 +50,8 @@ static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_c
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
 void Task_Adc(void *pvParameters);
 void Task_RMS(void *pvParameters);
+float media(float dados_tensao[]);
+float rms(float media,float dados_tensao[]);
 
 //PROTÓTIPO DA  CALIBRAÇÃO DO PWM
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle); // ADC calibration init
@@ -50,7 +63,7 @@ void app_main(void)
 
     fila_dados = xQueueCreate(15, sizeof(dados));
     if (fila_dados == NULL) {
-        printf("Erro ao criar a fila!\n");
+        ESP_LOGI(TAG, "Erro ao criar a Fila!");
         return;
     }
 
@@ -67,7 +80,7 @@ void app_main(void)
      xTaskCreatePinnedToCore(
         Task_RMS,           // Função da tarefa
         "TarefaNoCore0",        // Nome da tarefa
-        2048,                   // Tamanho da stack (em palavras, não bytes)
+        8192,                   // Tamanho da stack (em palavras, não bytes)
         NULL,                   // Parâmetro para a tarefa
         2,                      // Prioridade
         &s_task_handle2,   // Handle da tarefa
@@ -90,13 +103,13 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
     adc_continuous_handle_t handle = NULL;
 
     adc_continuous_handle_cfg_t adc_config = {
-        .max_store_buf_size = 1024,
+        .max_store_buf_size = 3600,
         .conv_frame_size = EXAMPLE_READ_LEN,
     };
     ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
 
     adc_continuous_config_t dig_cfg = {
-        .sample_freq_hz = 20 * 1000,
+        .sample_freq_hz = 18000,
         .conv_mode = EXAMPLE_ADC_CONV_MODE,
         .format = ADC_DIGI_OUTPUT_FORMAT_TYPE1
     };
@@ -105,7 +118,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
     dig_cfg.pattern_num = channel_num;
     for (int i = 0; i < channel_num; i++) {
         adc_pattern[i].atten = EXAMPLE_ADC_ATTEN;
-        adc_pattern[i].channel = ADC_CHANNEL_6;
+        adc_pattern[i].channel = channel[i] & 0x7;
         adc_pattern[i].unit = EXAMPLE_ADC_UNIT;
         adc_pattern[i].bit_width = EXAMPLE_ADC_BIT_WIDTH;
 
@@ -127,7 +140,7 @@ void Task_Adc(void *pvParameters){
     uint32_t ret_num = 0;
 
     adc_continuous_handle_t handle = NULL;
-    continuous_adc_init(&channel, sizeof(channel) / sizeof(adc_channel_t), &handle);
+    continuous_adc_init(channel, sizeof(channel) / sizeof(adc_channel_t), &handle);
 
     adc_continuous_evt_cbs_t cbs = {
         .on_conv_done = s_conv_done_cb,
@@ -163,13 +176,21 @@ void Task_RMS(void *pvParameters){
 
     dados recebido;
 
+    
+
     //-------------ADC1 Calibration Init---------------//
     adc_cali_handle_t adc1_cali_chan6_handle = NULL;    // ADC1 Calibration handle
     bool do_calibration1_chan6 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_6, &adc1_cali_chan6_handle); // ADC1 Calibration Init
+    adc_cali_handle_t adc1_cali_chan7_handle = NULL;    // ADC1 Calibration handle
+    bool do_calibration1_chan7 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_7, ADC_ATTEN_DB_6, &adc1_cali_chan7_handle);
+    adc_cali_handle_t adc1_cali_chan4_handle = NULL;    // ADC1 Calibration handle
+    bool do_calibration1_chan4 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_4, ADC_ATTEN_DB_6, &adc1_cali_chan4_handle);
 
     while(1){
+        int j =0, k = 0, n = 0; 
 
-        if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS) {
+        if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS){
+            
              for (int i = 0; i <recebido.num; i += SOC_ADC_DIGI_RESULT_BYTES) {
                 // Cast direto para acessar a amostra correta
                 const adc_digi_output_data_t *p = (const adc_digi_output_data_t *)(&recebido.result[i]);
@@ -177,9 +198,27 @@ void Task_RMS(void *pvParameters){
                     ESP_LOGI(TAG, "Channel: %d, Value: %d",
                             p->type1.channel,
                             p->type1.data);
-                    if (do_calibration1_chan6){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, p->type1.data,&TENSAO));            // ADC1 CALIBRAÇÃO
-                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_6, TENSAO); // ADC1 LOG CALIBRAÇÃO
+                    if (do_calibration1_chan6 && p->type1.channel == 6 ){
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                            dados_tensao.dados_tensao1[j] = (float)TENSAO/1000;
+                            j++; 
+                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
+                        }else{
+                             ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                        };
+                    if (do_calibration1_chan7 && p->type1.channel == 7 ){
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan7_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                            dados_tensao.dados_tensao2[k] = (float)TENSAO/1000;
+                            k++; 
+                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
+                        }else{
+                             ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                        };
+                    if (do_calibration1_chan4 && p->type1.channel == 4 ){
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                            dados_tensao.dados_tensao3[n] = (float)TENSAO/1000;
+                            n++; 
+                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                         }else{
                              ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
@@ -191,6 +230,11 @@ void Task_RMS(void *pvParameters){
                             p->type1.data);
                 }
             }
+        ESP_LOGI(TAG, "Valor RMS1 = %f", rms(media(dados_tensao.dados_tensao1), dados_tensao.dados_tensao1)); 
+        ESP_LOGI(TAG, "Valor RMS1 = %f", rms(media(dados_tensao.dados_tensao2), dados_tensao.dados_tensao2)); 
+        ESP_LOGI(TAG, "Valor RMS1 = %f", rms(media(dados_tensao.dados_tensao3), dados_tensao.dados_tensao3)); 
+        }else{
+            ESP_LOGI(TAG, "VALOR PERDIDO NA FILA");
         }
     }
     
@@ -199,6 +243,23 @@ void Task_RMS(void *pvParameters){
         example_adc_calibration_deinit(adc1_cali_chan6_handle);     // ADC1 Calibration Deinit
     }
     
+};
+
+float media(float dados_tensao[]){
+    float mean = 0;
+    for(int i=0; i<sizeof(dados_tensao)/sizeof(dados_tensao[0]); i++){
+        mean = mean + dados_tensao[i];
+
+    }
+    return mean/(sizeof(dados_tensao)/sizeof(dados_tensao[0]));
+};
+
+float rms(float media,float dados_tensao[]){
+    float rms = 0;
+    for(int i = 0; i<sizeof(dados_tensao)/sizeof(dados_tensao[0]); i++){
+        rms = rms + pow((dados_tensao[i]-media),2);
+    };
+    return sqrt(rms/(sizeof(dados_tensao)/sizeof(dados_tensao[0])));
 };
 
 // DECLARAÇÃO DAS FUNÇÕES DE CALIBRAÇÃO DO ADC
