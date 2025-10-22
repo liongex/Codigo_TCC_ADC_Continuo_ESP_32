@@ -35,7 +35,7 @@ typedef struct{
     float dados_tensao3[100];
 }Valor_tensao;
 
-static adc_channel_t channel[3]= {ADC_CHANNEL_6, ADC_CHANNEL_7, ADC_CHANNEL_4};
+static adc_channel_t channel[3]= {ADC_CHANNEL_6, ADC_CHANNEL_7, ADC_CHANNEL_3};
 static QueueHandle_t fila_dados;
 
 
@@ -50,8 +50,8 @@ static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_c
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
 void Task_Adc(void *pvParameters);
 void Task_RMS(void *pvParameters);
-float media(float dados_tensao[]);
-float rms(float media,float dados_tensao[]);
+float media(float*dados, int tamanho);
+float rms(float media,float*dados, int tamanho);
 
 //PROTÓTIPO DA  CALIBRAÇÃO DO PWM
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle); // ADC calibration init
@@ -195,32 +195,32 @@ void Task_RMS(void *pvParameters){
                 // Cast direto para acessar a amostra correta
                 const adc_digi_output_data_t *p = (const adc_digi_output_data_t *)(&recebido.result[i]);
                 if (p->type1.channel < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1)) {
-                    ESP_LOGI(TAG, "Channel: %d, Value: %d",
-                            p->type1.channel,
-                            p->type1.data);
+                    //ESP_LOGI(TAG, "Channel: %d, Value: %d",
+                         //   p->type1.channel,
+                         //   p->type1.data);
                     if (do_calibration1_chan6 && p->type1.channel == 6 ){
                             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
-                            dados_tensao.dados_tensao1[j] = (float)TENSAO/1000;
+                            dados_tensao.dados_tensao1[j] = (float)TENSAO;
+                          //  ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f V", ADC_UNIT_1 + 1, p->type1.channel, dados_tensao.dados_tensao1[j]);
                             j++; 
-                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                         }else{
-                             ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            // ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
                     if (do_calibration1_chan7 && p->type1.channel == 7 ){
                             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan7_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
-                            dados_tensao.dados_tensao2[k] = (float)TENSAO/1000;
+                            dados_tensao.dados_tensao2[k] = (float)TENSAO;
+                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                             k++; 
-                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                         }else{
-                             ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                           //  ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
-                    if (do_calibration1_chan4 && p->type1.channel == 4 ){
+                    if (do_calibration1_chan4 && p->type1.channel == 3 ){
                             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
-                            dados_tensao.dados_tensao3[n] = (float)TENSAO/1000;
+                            dados_tensao.dados_tensao3[n] = (float)TENSAO;
+                           // ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                             n++; 
-                            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                         }else{
-                             ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            // ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
 
                 vTaskDelay(pdMS_TO_TICKS(1));
@@ -230,9 +230,11 @@ void Task_RMS(void *pvParameters){
                             p->type1.data);
                 }
             }
-        ESP_LOGI(TAG, "Valor RMS1 = %f", rms(media(dados_tensao.dados_tensao1), dados_tensao.dados_tensao1)); 
-        ESP_LOGI(TAG, "Valor RMS1 = %f", rms(media(dados_tensao.dados_tensao2), dados_tensao.dados_tensao2)); 
-        ESP_LOGI(TAG, "Valor RMS1 = %f", rms(media(dados_tensao.dados_tensao3), dados_tensao.dados_tensao3)); 
+        ESP_LOGI(TAG, "Valor RMS6 = %fmV", rms(media(dados_tensao.dados_tensao1,(sizeof(dados_tensao.dados_tensao1)/sizeof(dados_tensao.dados_tensao1[0]))),dados_tensao.dados_tensao1,(sizeof(dados_tensao.dados_tensao1)/sizeof(dados_tensao.dados_tensao1[0])))); 
+        ESP_LOGI(TAG, "Valor RMS7 = %fmV", rms(media(dados_tensao.dados_tensao2,(sizeof(dados_tensao.dados_tensao2)/sizeof(dados_tensao.dados_tensao2[0]))),dados_tensao.dados_tensao2,(sizeof(dados_tensao.dados_tensao2)/sizeof(dados_tensao.dados_tensao2[0])))); 
+        ESP_LOGI(TAG, "Valor RMS3 = %fmV", rms(media(dados_tensao.dados_tensao3,(sizeof(dados_tensao.dados_tensao3)/sizeof(dados_tensao.dados_tensao3[0]))),dados_tensao.dados_tensao3,(sizeof(dados_tensao.dados_tensao3)/sizeof(dados_tensao.dados_tensao3[0])))); 
+        
+         
         }else{
             ESP_LOGI(TAG, "VALOR PERDIDO NA FILA");
         }
@@ -245,21 +247,23 @@ void Task_RMS(void *pvParameters){
     
 };
 
-float media(float dados_tensao[]){
+float media(float*dados, int tamanho){
     float mean = 0;
-    for(int i=0; i<sizeof(dados_tensao)/sizeof(dados_tensao[0]); i++){
-        mean = mean + dados_tensao[i];
-
+    for(int i=0; i< tamanho; i++){
+        //ESP_LOGI(TAG, "VALOR  dado = %f  e iteracao = %d e media = %f" ,dados[i],i,mean);
+        mean = mean + dados[i];
+        
     }
-    return mean/(sizeof(dados_tensao)/sizeof(dados_tensao[0]));
+    //ESP_LOGI(TAG, "VALOR  mean = %f " ,mean/tamanho);
+    return (mean/tamanho);
 };
 
-float rms(float media,float dados_tensao[]){
+float rms(float media,float*dados, int tamanho){
     float rms = 0;
-    for(int i = 0; i<sizeof(dados_tensao)/sizeof(dados_tensao[0]); i++){
-        rms = rms + pow((dados_tensao[i]-media),2);
+    for(int i = 0; i<tamanho; i++){
+        rms = rms + pow((dados[i]-media),2);
     };
-    return sqrt(rms/(sizeof(dados_tensao)/sizeof(dados_tensao[0])));
+    return sqrt(rms/tamanho);
 };
 
 // DECLARAÇÃO DAS FUNÇÕES DE CALIBRAÇÃO DO ADC
