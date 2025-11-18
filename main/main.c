@@ -21,7 +21,7 @@
 #define EXAMPLE_ADC_ATTEN                   ADC_ATTEN_DB_6
 #define EXAMPLE_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH
 
-#define EXAMPLE_READ_LEN                    600
+#define EXAMPLE_READ_LEN                    1200
 
 typedef struct{
     uint8_t result[EXAMPLE_READ_LEN];
@@ -44,7 +44,7 @@ static const char *TAG = "EXAMPLE";
 static dados dado = {0};
 static Valor_tensao dados_tensao = {0};
 
-static int TENSAO;  
+static int TENSAO = 0;  
 
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
@@ -103,7 +103,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
     adc_continuous_handle_t handle = NULL;
 
     adc_continuous_handle_cfg_t adc_config = {
-        .max_store_buf_size = 3600,
+        .max_store_buf_size = 6000,
         .conv_frame_size = EXAMPLE_READ_LEN,
     };
     ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
@@ -137,7 +137,6 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
 void Task_Adc(void *pvParameters){
 
     esp_err_t ret;
-    uint32_t ret_num = 0;
 
     adc_continuous_handle_t handle = NULL;
     continuous_adc_init(channel, sizeof(channel) / sizeof(adc_channel_t), &handle);
@@ -152,10 +151,9 @@ void Task_Adc(void *pvParameters){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         while(1){
-            ret = adc_continuous_read(handle, dado.result, EXAMPLE_READ_LEN, &ret_num, 0);
+            ret = adc_continuous_read(handle, dado.result, EXAMPLE_READ_LEN, &dado.num, 0);
             if (ret == ESP_OK) {
-                ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
-                dado.num=ret_num;
+                ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, dado.num);
                 if (xQueueSend(fila_dados, &dado, portMAX_DELAY) != pdPASS) {
                 printf("Falha ao enviar para a fila\n");
                 };
@@ -164,7 +162,6 @@ void Task_Adc(void *pvParameters){
                 break;
             }
         };
-         vTaskDelay(pdMS_TO_TICKS(1));
 
     };
 
@@ -177,53 +174,47 @@ void Task_RMS(void *pvParameters){
     dados recebido;
 
     
-
     //-------------ADC1 Calibration Init---------------//
-    adc_cali_handle_t adc1_cali_chan6_handle = NULL;    // ADC1 Calibration handle
-    bool do_calibration1_chan6 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_6, &adc1_cali_chan6_handle); // ADC1 Calibration Init
-    adc_cali_handle_t adc1_cali_chan7_handle = NULL;    // ADC1 Calibration handle
-    bool do_calibration1_chan7 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_7, ADC_ATTEN_DB_6, &adc1_cali_chan7_handle);
-    adc_cali_handle_t adc1_cali_chan4_handle = NULL;    // ADC1 Calibration handle
-    bool do_calibration1_chan4 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_4, ADC_ATTEN_DB_6, &adc1_cali_chan4_handle);
+    adc_cali_handle_t adc1_cali_handle = NULL;    // ADC1 Calibration handle
+    bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_6, &adc1_cali_handle); // ADC1 Calibration Init
 
     while(1){
         int j =0, k = 0, n = 0; 
 
         if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS){
             
-             for (int i = 0; i <recebido.num; i += SOC_ADC_DIGI_RESULT_BYTES) {
+             for (int i = 0; i <recebido.num; i += SOC_ADC_DIGI_DATA_BYTES_PER_CONV ) {
                 // Cast direto para acessar a amostra correta
                 const adc_digi_output_data_t *p = (const adc_digi_output_data_t *)(&recebido.result[i]);
                 if (p->type1.channel < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1)) {
                     //ESP_LOGI(TAG, "Channel: %d, Value: %d",
                          //   p->type1.channel,
                          //   p->type1.data);
-                    if (do_calibration1_chan6 && p->type1.channel == 6 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                    if (do_calibration1 && p->type1.channel == 6 ){
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
                             dados_tensao.dados_tensao1[j] = (float)TENSAO;
                           //  ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f V", ADC_UNIT_1 + 1, p->type1.channel, dados_tensao.dados_tensao1[j]);
-                            j++; 
+                          j++; 
                         }else{
                             // ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
-                    if (do_calibration1_chan7 && p->type1.channel == 7 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan7_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                    if (do_calibration1 && p->type1.channel == 7 ){
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
                             dados_tensao.dados_tensao2[k] = (float)TENSAO;
                             //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
                             k++; 
                         }else{
                            //  ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
-                    if (do_calibration1_chan4 && p->type1.channel == 3 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                    if (do_calibration1 && p->type1.channel == 3 ){
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
                             dados_tensao.dados_tensao3[n] = (float)TENSAO;
                            // ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
-                            n++; 
+                           n++; 
                         }else{
                             // ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
                         };
 
-                vTaskDelay(pdMS_TO_TICKS(1));
                 } else {
                     ESP_LOGW(TAG, "Invalid data [Ch%d_%d]",
                             p->type1.channel,
@@ -240,9 +231,9 @@ void Task_RMS(void *pvParameters){
         }
     }
     
-    if (do_calibration1_chan6)                                      // ADC1 Calibration Deinit
+    if (do_calibration1)                                      // ADC1 Calibration Deinit
     {
-        example_adc_calibration_deinit(adc1_cali_chan6_handle);     // ADC1 Calibration Deinit
+        example_adc_calibration_deinit(adc1_cali_handle);     // ADC1 Calibration Deinit
     }
     
 };
