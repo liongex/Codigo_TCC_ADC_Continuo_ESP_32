@@ -18,7 +18,7 @@
 
 #define EXAMPLE_ADC_UNIT                    ADC_UNIT_1
 #define EXAMPLE_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1
-#define EXAMPLE_ADC_ATTEN                   ADC_ATTEN_DB_6
+#define EXAMPLE_ADC_ATTEN                   ADC_ATTEN_DB_2_5
 #define EXAMPLE_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH
 
 #define EXAMPLE_READ_LEN                    1200
@@ -29,13 +29,13 @@ typedef struct{
 
 }dados;
 
-typedef struct{
+typedef struct{ 
     float dados_tensao1[100];
     float dados_tensao2[100];
     float dados_tensao3[100];
 }Valor_tensao;
 
-static adc_channel_t channel[3]= {ADC_CHANNEL_6, ADC_CHANNEL_7, ADC_CHANNEL_3};
+static adc_channel_t channel[3]= {ADC_CHANNEL_3, ADC_CHANNEL_6, ADC_CHANNEL_7};
 static QueueHandle_t fila_dados;
 
 
@@ -69,21 +69,22 @@ void app_main(void)
 
 
     xTaskCreatePinnedToCore(
-        Task_Adc,           // Função da tarefa
+        Task_Adc,               // Função da tarefa
         "TarefaNoCore1",        // Nome da tarefa
         2048,                   // Tamanho da stack (em palavras, não bytes)
         NULL,                   // Parâmetro para a tarefa
         2,                      // Prioridade
-        &s_task_handle1,   // Handle da tarefa
+        &s_task_handle1,        // Handle da tarefa
         1                       // Core onde a tarefa será fixada (0 ou 1)
     );
+    
      xTaskCreatePinnedToCore(
-        Task_RMS,           // Função da tarefa
+        Task_RMS,               // Função da tarefa
         "TarefaNoCore0",        // Nome da tarefa
         8192,                   // Tamanho da stack (em palavras, não bytes)
         NULL,                   // Parâmetro para a tarefa
         2,                      // Prioridade
-        &s_task_handle2,   // Handle da tarefa
+        &s_task_handle2,        // Handle da tarefa
         0                       // Core onde a tarefa será fixada (0 ou 1)
     );
 
@@ -98,6 +99,7 @@ static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_c
 
     return (mustYield == pdTRUE);
 };
+
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle){
     
     adc_continuous_handle_t handle = NULL;
@@ -176,7 +178,7 @@ void Task_RMS(void *pvParameters){
     
     //-------------ADC1 Calibration Init---------------//
     adc_cali_handle_t adc1_cali_handle = NULL;    // ADC1 Calibration handle
-    bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_6, &adc1_cali_handle); // ADC1 Calibration Init
+    bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_2_5, &adc1_cali_handle); // ADC1 Calibration Init
 
     while(1){
         int j =0, k = 0, n = 0; 

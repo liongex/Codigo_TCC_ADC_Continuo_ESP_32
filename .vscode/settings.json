@@ -20,5 +20,6 @@
     "freertos.h": "c",
     "adc_continuous.h": "c"
   },
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.currentSetup": "C:\\Users\\IsacEsp\\esp\\v5.5.1\\esp-idf"
 }
