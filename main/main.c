@@ -34,17 +34,17 @@ typedef struct{
 
 //Struct criado para armazenar as amostras processadas de tensão e corrente para cada canal
 typedef struct{ 
-    float dados_tensao1[100];   // DEVERÁ SER LIDO NO CANAL 0
-    float dados_tensao2[100];   // DEVERÁ SER LIDO NO CANAL 4
-    float dados_tensao3[100];   // DEVERÁ SER LIDO NO CANAL 6
-    float dados_corrente1[100]; // DEVERÁ SER LIDO NO CANAL 3
-    float dados_corrente2[100]; // DEVERÁ SER LIDO NO CANAL 5
-    float dados_corrente3[100]; // DEVERÁ SER LIDO NO CANAL 7
+    float dados_tensao1[100];   // DEVERÁ SER LIDO NO CANAL 3
+    float dados_tensao2[100];   // DEVERÁ SER LIDO NO CANAL 5
+    float dados_tensao3[100];   // DEVERÁ SER LIDO NO CANAL 7
+    float dados_corrente1[100]; // DEVERÁ SER LIDO NO CANAL 0
+    float dados_corrente2[100]; // DEVERÁ SER LIDO NO CANAL 4
+    float dados_corrente3[100]; // DEVERÁ SER LIDO NO CANAL 6
 
 }Valor_saida;
 
 //Vetor com os canais utilizados e fila para receber os dados obtidos do ADC1 e permitir que sejam enviadas para a tarefa de processamento
-static adc_channel_t channel[6]= {ADC_CHANNEL_0, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5 ,ADC_CHANNEL_6, ADC_CHANNEL_7};
+static adc_channel_t channel[6]= {ADC_CHANNEL_0, ADC_CHANNEL_6, ADC_CHANNEL_4, ADC_CHANNEL_3, ADC_CHANNEL_5, ADC_CHANNEL_7};
 static QueueHandle_t fila_dados;
 
 // Handles para as taregas e TAG para controle de erros
@@ -79,7 +79,7 @@ void app_main(void)
 {
     memset(dado.result, 0xcc, EXAMPLE_READ_LEN); //Preencher o vetor de amostras brutas para facilitar debug
 
-    fila_dados = xQueueCreate(20, sizeof(dados)); //Criação da fila para recebimento das amostras brutas
+    fila_dados = xQueueCreate(50, sizeof(dados)); //Criação da fila para recebimento das amostras brutas
     if (fila_dados == NULL) {
         ESP_LOGI(TAG, "Erro ao criar a Fila!");
         return;
@@ -89,7 +89,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(
         Task_Adc,               // Função da tarefa
         "TarefaNoCore1",        // Nome da tarefa
-        2048,                   // Tamanho da stack (em palavras, não bytes)
+        8192,                   // Tamanho da stack (em palavras, não bytes)
         NULL,                   // Parâmetro para a tarefa
         2,                      // Prioridade
         &s_task_handle1,        // Handle da tarefa
@@ -125,7 +125,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
     adc_continuous_handle_t handle = NULL;
 
     adc_continuous_handle_cfg_t adc_config = {
-        .max_store_buf_size = 19200,
+        .max_store_buf_size = 48000,
         .conv_frame_size = EXAMPLE_READ_LEN,
     };
     ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
@@ -140,7 +140,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
     dig_cfg.pattern_num = channel_num;
     for (int i = 0; i < channel_num; i++) {
         adc_pattern[i].atten = EXAMPLE_ADC_ATTEN;
-        adc_pattern[i].channel = channel[i] & 0x7;
+        adc_pattern[i].channel = channel[i];
         adc_pattern[i].unit = EXAMPLE_ADC_UNIT;
         adc_pattern[i].bit_width = EXAMPLE_ADC_BIT_WIDTH;
 
@@ -204,61 +204,59 @@ void Task_RMS(void *pvParameters){
         int j =0, k = 0, n = 0, m = 0, v = 0, b = 0; 
 
         if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS){
-            
              for (int i = 0; i <recebido.num; i += SOC_ADC_DIGI_DATA_BYTES_PER_CONV ) {
                 // Cast direto para acessar a amostra correta
                 const adc_digi_output_data_t *p = (const adc_digi_output_data_t *)(&recebido.result[i]);
+                ESP_LOGI(TAG, "Channel: %d, Value: %d", p->type1.channel, p->type1.data);
                 if (p->type1.channel < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1)) {
-                    ESP_LOGI(TAG, "Channel: %d, Value: %d",
-                            p->type1.channel,
-                            p->type1.data);
+                    //ESP_LOGI(TAG, "Channel: %d, Value: %d", p->type1.channel, p->type1.data);
                     if (do_calibration1 && p->type1.channel == 0 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
-                            SAIDA.dados_tensao1[j] = (float)TENSAO;
-                          //  ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f V", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
-                          j++; 
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &CORRENTE));     // ADC1 CALIBRAÇÃO
+                            SAIDA.dados_corrente1[j] = (float)CORRENTE;
+                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f V", ADC_UNIT_1 + 1, p->type1.channel, SAIDA.dados_corrente1[j]);
+                            j++; 
                         }else{
-                            ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            //ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO CANAL 0"); // ADC1 LOG CALIBRAÇÃO
                         };
                     if (do_calibration1 && p->type1.channel == 4 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
-                            SAIDA.dados_tensao2[k] = (float)TENSAO;
-                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &CORRENTE));     // ADC1 CALIBRAÇÃO
+                            SAIDA.dados_corrente2[k] = (float)CORRENTE;
+                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f mV", ADC_UNIT_1 + 1, p->type1.channel, SAIDA.dados_corrente2[k]);
                             k++; 
                         }else{
-                            ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            //ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO CANAL 4"); // ADC1 LOG CALIBRAÇÃO
                         };
                     if (do_calibration1 && p->type1.channel == 6 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
-                            SAIDA.dados_tensao3[n] = (float)TENSAO;
-                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, TENSAO);
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &CORRENTE));     // ADC1 CALIBRAÇÃO
+                            SAIDA.dados_corrente3[n] = (float)CORRENTE;
+                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f mV", ADC_UNIT_1 + 1, p->type1.channel, SAIDA.dados_corrente3[n]);
                             n++; 
                         }else{
-                            ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            //ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO CANAL 6"); // ADC1 LOG CALIBRAÇÃO
                         };
                     if (do_calibration1 && p->type1.channel == 3 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &CORRENTE));     // ADC1 CALIBRAÇÃO
-                            SAIDA.dados_corrente1[m] = (float)CORRENTE;
-                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, CORRENTE);
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                            SAIDA.dados_tensao1[m] = (float)TENSAO;
+                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f mV", ADC_UNIT_1 + 1, p->type1.channel, SAIDA.dados_tensao1[m], m);
                             m++; 
                         }else{
-                            ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            //ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO CANAL 3"); // ADC1 LOG CALIBRAÇÃO
                         };
                     if (do_calibration1 && p->type1.channel == 5 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &CORRENTE));     // ADC1 CALIBRAÇÃO
-                            SAIDA.dados_corrente2[v] = (float)CORRENTE;
-                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, CORRENTE);
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                            SAIDA.dados_tensao2[v] = (float)TENSAO;
+                            //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f mV", ADC_UNIT_1 + 1, p->type1.channel, SAIDA.dados_tensao2[v]);
                             v++; 
                         }else{
-                            ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            //ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO CANAL 5"); // ADC1 LOG CALIBRAÇÃO
                         };
                     if (do_calibration1 && p->type1.channel == 7 ){
-                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &CORRENTE));     // ADC1 CALIBRAÇÃO
-                            SAIDA.dados_corrente3[b] = (float)CORRENTE;
-                           // ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, p->type1.channel, CORRENTE);
+                            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, p->type1.data, &TENSAO));     // ADC1 CALIBRAÇÃO
+                            SAIDA.dados_tensao3[b] = (float)TENSAO;
+                           // ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %f mV", ADC_UNIT_1 + 1, p->type1.channel, SAIDA.dados_tensao3[b]);
                            b++; 
                         }else{
-                            ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO"); // ADC1 LOG CALIBRAÇÃO
+                            //ESP_LOGI(TAG, "NAO ATIVOU A CALIBRACAO CANAL 7"); // ADC1 LOG CALIBRAÇÃO
                         };
 
                 } else {
@@ -268,12 +266,12 @@ void Task_RMS(void *pvParameters){
                 }
             }
 
-        ESP_LOGI(TAG, "Valor Tensao 1 RMS0 = %fmV", rms(SAIDA.dados_tensao1,TAMANHO(SAIDA.dados_tensao1))); 
-        ESP_LOGI(TAG, "Valor Tensao 2 RMS4 = %fmV", rms(SAIDA.dados_tensao2,TAMANHO(SAIDA.dados_tensao2))); 
-        ESP_LOGI(TAG, "Valor Tensao 3 RMS6 = %fmV", rms(SAIDA.dados_tensao3,TAMANHO(SAIDA.dados_tensao3))); 
-        ESP_LOGI(TAG, "Valor Corrente 1 RMS3 = %fmV", rms(SAIDA.dados_corrente1,TAMANHO(SAIDA.dados_corrente1))); 
-        ESP_LOGI(TAG, "Valor Corrente 2 RMS5 = %fmV", rms(SAIDA.dados_corrente2,TAMANHO(SAIDA.dados_corrente2))); 
-        ESP_LOGI(TAG, "Valor Corrente 3 RMS7 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
+       // ESP_LOGI(TAG, "Valor Tensao 1 RMS0 = %fmV", rms(SAIDA.dados_tensao1,TAMANHO(SAIDA.dados_tensao1))); 
+        //ESP_LOGI(TAG, "Valor Tensao 2 RMS4 = %fmV", rms(SAIDA.dados_tensao2,TAMANHO(SAIDA.dados_tensao2))); 
+        //ESP_LOGI(TAG, "Valor Corrente 3 RMS6 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
+        //ESP_LOGI(TAG, "Valor Corrente 1 RMS3 = %fmV", rms(SAIDA.dados_corrente1,TAMANHO(SAIDA.dados_corrente1))); 
+       // ESP_LOGI(TAG, "Valor Corrente 2 RMS5 = %fmV", rms(SAIDA.dados_corrente2,TAMANHO(SAIDA.dados_corrente2))); 
+        //ESP_LOGI(TAG, "Valor Corrente 3 RMS7 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
 
         
         }else{
