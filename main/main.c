@@ -62,6 +62,8 @@ static int CORRENTE = 0;
 
 //Protótipo da função de interrupção para cada frame completo
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
+// NOVO: Protótipo da função de interrupção para Pool Cheio
+static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 //Pro tótipo da função de inicialização do ADC
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
 //Protótipo da tarefa de recebimento de amostras do ADC.
@@ -121,6 +123,15 @@ static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_c
     return (mustYield == pdTRUE);
 };
 
+static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
+    
+    // Log seguro para ser executado dentro de uma interrupção (ISR)
+    esp_rom_printf("WARNING: ADC Pool Overflow! A Task esta muito lenta e perdemos amostras.\n");
+    
+    // Retorna false pois não estamos acordando nenhuma task diretamente aqui
+    return pdFALSE;
+};
+
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle){
     
     adc_continuous_handle_t handle = NULL;
@@ -166,6 +177,7 @@ void Task_Adc(void *pvParameters){
 
     adc_continuous_evt_cbs_t cbs = {
         .on_conv_done = s_conv_done_cb,
+        .on_pool_ovf = s_pool_ovf_cb, 
     };
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
     ESP_ERROR_CHECK(adc_continuous_start(handle));
@@ -176,7 +188,7 @@ void Task_Adc(void *pvParameters){
         while(1){
             ret = adc_continuous_read(handle, dado.result, EXAMPLE_READ_LEN, &dado.num, 0);
             if (ret == ESP_OK) {
-                ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, dado.num);
+                //ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, dado.num);
                 if (xQueueSend(fila_dados, &dado, portMAX_DELAY) != pdPASS) {
                 printf("Falha ao enviar para a fila\n");
                 };
@@ -202,6 +214,7 @@ void Task_RMS(void *pvParameters){
     bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_2_5, &adc1_cali_handle); // ADC1 Calibration Init
 
     while(1){
+        
         int j =0, k = 0, n = 0, m = 0, v = 0, b = 0; 
 
         if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS){
@@ -267,12 +280,12 @@ void Task_RMS(void *pvParameters){
                 }
             }
 
-            ESP_LOGI(TAG, "Valor Corrente 1 RMS0 = %fmV", rms(SAIDA.dados_corrente1,TAMANHO(SAIDA.dados_corrente1))); 
-            ESP_LOGI(TAG, "Valor Corrente 2 RMS4 = %fmV", rms(SAIDA.dados_corrente2,TAMANHO(SAIDA.dados_corrente2))); 
-            ESP_LOGI(TAG, "Valor Corrente 3 RMS6 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
-            ESP_LOGI(TAG, "Valor Tensao 1 RMS3 = %fmV", rms(SAIDA.dados_tensao1,TAMANHO(SAIDA.dados_tensao1))); 
-            ESP_LOGI(TAG, "Valor Tensao 2 RMS5 = %fmV", rms(SAIDA.dados_tensao2,TAMANHO(SAIDA.dados_tensao2))); 
-            ESP_LOGI(TAG, "Valor Tensao 3 RMS7 = %fmV", rms(SAIDA.dados_tensao3,TAMANHO(SAIDA.dados_tensao3))); 
+            //(TAG, "Valor Corrente 1 RMS0 = %fmV", rms(SAIDA.dados_corrente1,TAMANHO(SAIDA.dados_corrente1))); 
+            //ESP_LOGI(TAG, "Valor Corrente 2 RMS4 = %fmV", rms(SAIDA.dados_corrente2,TAMANHO(SAIDA.dados_corrente2))); 
+            //ESP_LOGI(TAG, "Valor Corrente 3 RMS6 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
+            //ESP_LOGI(TAG, "Valor Tensao 1 RMS3 = %fmV", rms(SAIDA.dados_tensao1,TAMANHO(SAIDA.dados_tensao1))); 
+            //ESP_LOGI(TAG, "Valor Tensao 2 RMS5 = %fmV", rms(SAIDA.dados_tensao2,TAMANHO(SAIDA.dados_tensao2))); 
+            //ESP_LOGI(TAG, "Valor Tensao 3 RMS7 = %fmV", rms(SAIDA.dados_tensao3,TAMANHO(SAIDA.dados_tensao3))); 
 
         
         }else{
