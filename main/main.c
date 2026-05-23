@@ -12,45 +12,21 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
-#include "esp_adc/adc_continuous.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
+#include "ADC.h"
+#include "wifi.h"
+#include "MQTT_lib.h"
 
-#define EXAMPLE_ADC_UNIT                    ADC_UNIT_1 // Declara a utilização do ADC1 do esp21
-#define EXAMPLE_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1 // Garante que apenas o ADC1 será utilizado para a conversão
-#define EXAMPLE_ADC_ATTEN                   ADC_ATTEN_DB_2_5 // Atenuação de 2.5dB
-#define EXAMPLE_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH // Garente o uso de 12bits para cada amostra
-#define EXAMPLE_ADC_DATA_LENGTH               2 // Garente o uso de 12bits para cada amostra
-
-#define EXAMPLE_READ_LEN                    1200 // Tamanho para cada frame, considerando 100 amostras por canal, 4 bytes por amostra e 6 canais.
 
 #define TAMANHO(x) (sizeof(x) / sizeof((x)[0])) // Macro para obter tamanho da matriz
 
-//Struct criado para armazenar as amostras brutas retiradas do ADC
-typedef struct{
-    uint8_t result[EXAMPLE_READ_LEN];
-    uint32_t num;
-
-}dados;
-
-//Struct criado para armazenar as amostras processadas de tensão e corrente para cada canal
-typedef struct{ 
-    float dados_tensao1[100];   // DEVERÁ SER LIDO NO CANAL 3
-    float dados_tensao2[100];   // DEVERÁ SER LIDO NO CANAL 5
-    float dados_tensao3[100];   // DEVERÁ SER LIDO NO CANAL 7
-    float dados_corrente1[100]; // DEVERÁ SER LIDO NO CANAL 0
-    float dados_corrente2[100]; // DEVERÁ SER LIDO NO CANAL 4
-    float dados_corrente3[100]; // DEVERÁ SER LIDO NO CANAL 6
-
-}Valor_saida;
+static adc_channel_t channel[6]= {ADC_CHANNEL_0, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
 
 //Vetor com os canais utilizados e fila para receber os dados obtidos do ADC1 e permitir que sejam enviadas para a tarefa de processamento
-static adc_channel_t channel[6]= {ADC_CHANNEL_0, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
 static QueueHandle_t fila_dados;
 
 // Handles para as taregas e TAG para controle de erros
 static TaskHandle_t s_task_handle1 = NULL, s_task_handle2 = NULL;
-static const char *TAG = "ADC_CONTINUO";
+static const char *TAG = "CODIGO_MAIN";
 
 //Declaração e inicialização de variáveis da structs criadas.
 static dados dado = {0};
@@ -60,12 +36,6 @@ static Valor_saida SAIDA = {0};
 static int TENSAO = 0;
 static int CORRENTE = 0;  
 
-//Protótipo da função de interrupção para cada frame completo
-static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
-// NOVO: Protótipo da função de interrupção para Pool Cheio
-static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
-//Pro tótipo da função de inicialização do ADC
-static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
 //Protótipo da tarefa de recebimento de amostras do ADC.
 void Task_Adc(void *pvParameters);
 //Protótipo da tarefa de cálculo do RMS
@@ -74,9 +44,8 @@ void Task_RMS(void *pvParameters);
 float media(float*dados, int tamanho);
 float rms(float*dados, int tamanho);
 
-//Protótipo da função de calibração do ADC
-static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle); // ADC calibration init
-static void example_adc_calibration_deinit(adc_cali_handle_t handle);   
+static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
+static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 
 void app_main(void)
 {
@@ -114,59 +83,6 @@ void app_main(void)
 
 //DECLARAÇÃO DA FUNÇÕES
 
-static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
-    
-    BaseType_t mustYield = pdFALSE;
-    //Notify that ADC continuous driver has done enough number of conversions
-    vTaskNotifyGiveFromISR(s_task_handle1, &mustYield);
-
-    return (mustYield == pdTRUE);
-};
-
-static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
-    
-    // Log seguro para ser executado dentro de uma interrupção (ISR)
-    esp_rom_printf("WARNING: ADC Pool Overflow! A Task esta muito lenta e perdemos amostras.\n");
-    
-    // Retorna false pois não estamos acordando nenhuma task diretamente aqui
-    return pdFALSE;
-};
-
-static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle){
-    
-    adc_continuous_handle_t handle = NULL;
-
-    adc_continuous_handle_cfg_t adc_config = {
-        .max_store_buf_size = 24000,
-        .conv_frame_size = EXAMPLE_READ_LEN,
-    };
-    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
-
-    adc_continuous_config_t dig_cfg = {
-        .sample_freq_hz = 36000,
-        .conv_mode = EXAMPLE_ADC_CONV_MODE,
-        .format = ADC_DIGI_OUTPUT_FORMAT_TYPE1
-    };
-
-    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-    dig_cfg.pattern_num = channel_num;
-    for (int i = 0; i < channel_num; i++) {
-        adc_pattern[i].atten = EXAMPLE_ADC_ATTEN;
-        adc_pattern[i].channel = channel[i];
-        adc_pattern[i].unit = EXAMPLE_ADC_UNIT;
-        adc_pattern[i].bit_width = EXAMPLE_ADC_BIT_WIDTH;
-
-        ESP_LOGI(TAG, "adc_pattern[%d].atten is :%"PRIx8, i, adc_pattern[i].atten);
-        ESP_LOGI(TAG, "adc_pattern[%d].channel is :%"PRIx8, i, adc_pattern[i].channel);
-        ESP_LOGI(TAG, "adc_pattern[%d].unit is :%"PRIx8, i, adc_pattern[i].unit);
-    }
-    dig_cfg.adc_pattern = adc_pattern;
-    ESP_ERROR_CHECK(adc_continuous_config(handle, &dig_cfg));
-
-    *out_handle = handle;
-
-   
-};
 
 void Task_Adc(void *pvParameters){
 
@@ -320,72 +236,20 @@ float rms(float*dados, int tamanho){
     return sqrt(rms/tamanho);
 };
 
-// DECLARAÇÃO DAS FUNÇÕES DE CALIBRAÇÃO DO ADC
-static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
-{
-    adc_cali_handle_t handle = NULL;
-    esp_err_t ret = ESP_FAIL;
-    bool calibrated = false;
+static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
+    
+    BaseType_t mustYield = pdFALSE;
+    //Notify that ADC continuous driver has done enough number of conversions
+    vTaskNotifyGiveFromISR(s_task_handle1, &mustYield);
 
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (!calibrated)
-    {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
-        adc_cali_curve_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .chan = channel,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-        if (ret == ESP_OK)
-        {
-            calibrated = true;
-        }
-    }
-#endif
-
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (!calibrated)
-    {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
-        adc_cali_line_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-        if (ret == ESP_OK)
-        {
-            calibrated = true;
-        }
-    }
-#endif
-
-    *out_handle = handle;
-    if (ret == ESP_OK)
-    {
-        ESP_LOGI(TAG, "Calibration Success");
-    }
-    else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
-    {
-        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
-    }
-    else
-    {
-        ESP_LOGE(TAG, "Invalid arg or no memory");
-    }
-
-    return calibrated;
+    return (mustYield == pdTRUE);
 };
-static void example_adc_calibration_deinit(adc_cali_handle_t handle)
-{
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    ESP_LOGI(TAG, "deregister %s calibration scheme", "Curve Fitting");
-    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
 
-#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    ESP_LOGI(TAG, "deregister %s calibration scheme", "Line Fitting");
-    ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
-#endif
+static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
+    
+    // Log seguro para ser executado dentro de uma interrupção (ISR)
+    esp_rom_printf("WARNING: ADC Pool Overflow! A Task esta muito lenta e perdemos amostras.\n");
+    
+    // Retorna false pois não estamos acordando nenhuma task diretamente aqui
+    return pdFALSE;
 };

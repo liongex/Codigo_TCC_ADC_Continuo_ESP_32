@@ -1,0 +1,9 @@
+menu "MQTT Configuration"
+
+    config BROKER_URL
+        string "BROKER URL"
+        default "mqtt://mqtt.eclipseprojects.io"
+        help
+            BROKER_URL (url broker) for the example to connect to.
+
+endmenu
