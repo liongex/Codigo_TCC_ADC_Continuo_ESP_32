@@ -1,9 +1,3 @@
-
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-#include <math.h>
-
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,9 +9,7 @@
 #include "ADC.h"
 #include "wifi.h"
 #include "MQTT_lib.h"
-
-
-#define TAMANHO(x) (sizeof(x) / sizeof((x)[0])) // Macro para obter tamanho da matriz
+#include "FUNCTIONS.h"
 
 static adc_channel_t channel[6]= {ADC_CHANNEL_0, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
 
@@ -40,10 +32,7 @@ static int CORRENTE = 0;
 void Task_Adc(void *pvParameters);
 //Protótipo da tarefa de cálculo do RMS
 void Task_RMS(void *pvParameters);
-//Protótipos das funções de cálculo do rms, media e tamanho
-float media(float*dados, int tamanho);
-float rms(float*dados, int tamanho);
-
+//Protótipo das interrupções
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 
@@ -196,12 +185,12 @@ void Task_RMS(void *pvParameters){
                 }
             }
 
-            //(TAG, "Valor Corrente 1 RMS0 = %fmV", rms(SAIDA.dados_corrente1,TAMANHO(SAIDA.dados_corrente1))); 
-            //ESP_LOGI(TAG, "Valor Corrente 2 RMS4 = %fmV", rms(SAIDA.dados_corrente2,TAMANHO(SAIDA.dados_corrente2))); 
-            //ESP_LOGI(TAG, "Valor Corrente 3 RMS6 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
-            //ESP_LOGI(TAG, "Valor Tensao 1 RMS3 = %fmV", rms(SAIDA.dados_tensao1,TAMANHO(SAIDA.dados_tensao1))); 
-            //ESP_LOGI(TAG, "Valor Tensao 2 RMS5 = %fmV", rms(SAIDA.dados_tensao2,TAMANHO(SAIDA.dados_tensao2))); 
-            //ESP_LOGI(TAG, "Valor Tensao 3 RMS7 = %fmV", rms(SAIDA.dados_tensao3,TAMANHO(SAIDA.dados_tensao3))); 
+            ESP_LOGI(TAG, "Valor Corrente 1 RMS0 = %fmV", rms(SAIDA.dados_corrente1,TAMANHO(SAIDA.dados_corrente1))); 
+            ESP_LOGI(TAG, "Valor Corrente 2 RMS4 = %fmV", rms(SAIDA.dados_corrente2,TAMANHO(SAIDA.dados_corrente2))); 
+            ESP_LOGI(TAG, "Valor Corrente 3 RMS6 = %fmV", rms(SAIDA.dados_corrente3,TAMANHO(SAIDA.dados_corrente3))); 
+            ESP_LOGI(TAG, "Valor Tensao 1 RMS3 = %fmV", rms(SAIDA.dados_tensao1,TAMANHO(SAIDA.dados_tensao1))); 
+            ESP_LOGI(TAG, "Valor Tensao 2 RMS5 = %fmV", rms(SAIDA.dados_tensao2,TAMANHO(SAIDA.dados_tensao2))); 
+            ESP_LOGI(TAG, "Valor Tensao 3 RMS7 = %fmV", rms(SAIDA.dados_tensao3,TAMANHO(SAIDA.dados_tensao3))); 
 
         
         }else{
@@ -216,25 +205,6 @@ void Task_RMS(void *pvParameters){
     
 };
 
-float media(float*dados, int tamanho){
-    float mean = 0;
-    for(int i=0; i< tamanho; i++){
-        //ESP_LOGI(TAG, "VALOR  dado = %f  e iteracao = %d e media = %f" ,dados[i],i,mean);
-        mean = mean + dados[i];
-        
-    }
-    //ESP_LOGI(TAG, "VALOR  mean = %f " ,mean/tamanho);
-    return (mean/tamanho);
-};
-
-float rms(float*dados, int tamanho){
-    float mean = media(dados,tamanho);
-    float rms = 0;
-    for(int i = 0; i<tamanho; i++){
-        rms = rms + pow((dados[i]-mean),2);
-    };
-    return sqrt(rms/tamanho);
-};
 
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
     
