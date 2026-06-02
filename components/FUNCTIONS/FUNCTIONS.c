@@ -4,21 +4,23 @@
 #include <math.h>
 
 float media(float*dados, int tamanho){
-    float mean = 0;
-    for(int i=0; i< tamanho; i++){
-        //ESP_LOGI(TAG, "VALOR  dado = %f  e iteracao = %d e media = %f" ,dados[i],i,mean);
-        mean = mean + dados[i];
-        
+
+    float sum = 0.0f; // Use .0f para garantir que o compilador trate como float
+    for(int i = 0; i < tamanho; i++){
+        sum += dados[i];
     }
-    //ESP_LOGI(TAG, "VALOR  mean = %f " ,mean/tamanho);
-    return (mean/tamanho);
+    return sum / tamanho;
 };
 
 float rms(float*dados, int tamanho){
-    float mean = media(dados,tamanho);
-    float rms = 0;
-    for(int i = 0; i<tamanho; i++){
-        rms = rms + pow((dados[i]-mean),2);
-    };
-    return sqrt(rms/tamanho);
+
+    float mean = media(dados, tamanho);
+    float sum_sq = 0.0f;
+    
+    for(int i = 0; i < tamanho; i++){
+        float diff = dados[i] - mean;
+        sum_sq += (diff * diff); // MUITO mais rápido que pow()
+    }
+    
+    return sqrtf(sum_sq / tamanho); // Usando sqrtf() para aproveitar a FPU do ESP32
 };
