@@ -51,5 +51,21 @@ float media(float*dados, int tamanho);
 
 float rms(float*dados, int tamanho);
 
+/**
+ * @brief Protótipo da função de recuperar valor real da tensão a partir do rms medido no ESP32.
+ * @param[in] Vrms Valor rms da tensão medida no adc do ESP32
+ * @return Retorna uma variável de ponto flutuante com o valor da tensão real medida no circuito.
+ */
+
+float VReal_tensao(float Vrms);
+
+/**
+ * @brief Protótipo da função de recuperar valor real da tensão a partir do rms medido no ESP32.
+ * @param[in] Irms Valor rms da tensão medida no adc do ESP32
+ * @return Retorna uma variável de ponto flutuante com o valor da corrente real medida no circuito.
+ */
+
+float VReal_corrente(float Irms);
+
 
 #endif //FUNCTIONS_H

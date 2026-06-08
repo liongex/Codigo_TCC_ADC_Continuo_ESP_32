@@ -37,40 +37,9 @@
 #include "FUNCTIONS.h"
 
 /**
- * @brief Protótipo da função de callback para o caso de um frame completo.
- * @param[in] handle handle (referência/ponteiro opaco) para o driver do ADC contínuo que está chamando o callback.
- * @param[in] channel_num Estrutura que contém os dados do evento disparado pelo ADC.
- * @param[in] user_data Ponteiro genérico para dados definidos pelo usuário.
- * @return O retorno da função é true se mustYield == pdTRUE, ou seja, se for necessário realizar um context switch imediato.
- */
-
-static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
-
-/**
- * @brief Protótipo da função de callback para o caso de um frame completo.
- * @param[in] handle handle (referência/ponteiro opaco) para o driver do ADC contínuo que está chamando o callback.
- * @param[in] channel_num Estrutura que contém os dados do evento disparado pelo ADC.
- * @param[in] user_data Ponteiro genérico para dados definidos pelo usuário.
- * @return Retorna false pois não estamos acordando nenhuma task diretamente aqui.
- */
-
-static bool IRAM_ATTR s_pool_ovf_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
-
-/**
- * @brief Protótipo da tarefa de recebimento de amostras do ADC.
- */
-
-void Task_Adc(void *pvParameters);
-
-/**
- * @brief Protótipo da tarefa de cálculo do RMS
- */
-
-void Task_RMS(void *pvParameters);
-
-/**
  * @brief Protótipo da função de inicialização do sistema
  */
+
 void Start(void);
 
 #endif //RTOS_H

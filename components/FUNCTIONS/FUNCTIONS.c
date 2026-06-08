@@ -24,3 +24,12 @@ float rms(float*dados, int tamanho){
     
     return sqrtf(sum_sq / tamanho); // Usando sqrtf() para aproveitar a FPU do ESP32
 };
+
+float VReal_tensao(float Vrms) {
+    // 22.951219 * 38.33 = 879.719
+    return Vrms * 879.719f; 
+}
+
+float VReal_corrente(float Irms) {
+    return Irms * 145.161f;
+}

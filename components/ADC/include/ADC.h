@@ -50,7 +50,7 @@
 #define EXAMPLE_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1 // Garante que apenas o ADC1 será utilizado para a conversão
 #define EXAMPLE_ADC_ATTEN                   ADC_ATTEN_DB_2_5 // Atenuação de 2.5dB
 #define EXAMPLE_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH // Garente o uso de 12bits para cada amostra
-#define EXAMPLE_READ_LEN                    1200 // Tamanho para cada frame, considerando 100 amostras por canal, 4 bytes por amostra e 6 canais.
+#define EXAMPLE_READ_LEN                    1200 // Tamanho para cada frame, considerando 100 amostras por canal, 2 bytes por amostra e 6 canais.
 
 
 /**
