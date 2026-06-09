@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
+#include <math.h>
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -20,10 +21,18 @@
 
 // ESTRUTURA UNIFICADA: Passa todas as informações de uma vez só, evitando loops de filas
 typedef struct {
-    float c1, c2, c3;   // Valores brutos calculados no RMS
+    // Valores brutos calculados no RMS
     float t1, t2, t3;
-    float cr1, cr2, cr3; // Valores reais convertidos pela calibração física
+    float c1, c2, c3;
+    float p1_bruta, p2_bruta, p3_bruta; // Novas: Potências ativas brutas
+
+    // Valores reais convertidos pela calibração física
     float tr1, tr2, tr3;
+    float cr1, cr2, cr3;
+    float pr1, pr2, pr3; // Potência Ativa Real (W)
+    float qr1, qr2, qr3; // Potência Reativa Real (VAr)
+    float sr1, sr2, sr3; // Potência Aparente Real (VA)
+    float fp1, fp2, fp3; // Fator de Potência Real
 } telemetria_trifasica_t;
 
 static adc_channel_t channel[6] = {ADC_CHANNEL_0, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
@@ -146,14 +155,25 @@ void Task_RMS(void *pvParameters){
             }
 
             telemetria_trifasica_t pct;
-            pct.c1 = rms(SAIDA.dados_corrente1, TAMANHO(SAIDA.dados_corrente1));
-            pct.c2 = rms(SAIDA.dados_corrente2, TAMANHO(SAIDA.dados_corrente2));
-            pct.c3 = rms(SAIDA.dados_corrente3, TAMANHO(SAIDA.dados_corrente3));
-            pct.t1 = rms(SAIDA.dados_tensao1, TAMANHO(SAIDA.dados_tensao1));
-            pct.t2 = rms(SAIDA.dados_tensao2, TAMANHO(SAIDA.dados_tensao2));
-            pct.t3 = rms(SAIDA.dados_tensao3, TAMANHO(SAIDA.dados_tensao3));
+            // 1. Calcula os RMS brutos normais
+            pct.c1 = rms(SAIDA.dados_corrente1, 100);
+            pct.c2 = rms(SAIDA.dados_corrente2, 100);
+            pct.c3 = rms(SAIDA.dados_corrente3, 100);
+            pct.t1 = rms(SAIDA.dados_tensao1, 100);
+            pct.t2 = rms(SAIDA.dados_tensao2, 100);
+            pct.t3 = rms(SAIDA.dados_tensao3, 100);
 
-            // Passa os dados brutos adiante para a Task de Conversão Física
+            // 2. NOVO: Calcula o Produto Escalar bruto de cada fase (Super rápido via FPU!)
+            float soma_p1 = 0, soma_p2 = 0, soma_p3 = 0;
+            for(int i = 0; i < 100; i++) {
+                soma_p1 += SAIDA.dados_tensao1[i] * SAIDA.dados_corrente1[i];
+                soma_p2 += SAIDA.dados_tensao2[i] * SAIDA.dados_corrente2[i];
+                soma_p3 += SAIDA.dados_tensao3[i] * SAIDA.dados_corrente3[i];
+            }
+            pct.p1_bruta = soma_p1 / 100.0f;
+            pct.p2_bruta = soma_p2 / 100.0f;
+            pct.p3_bruta = soma_p3 / 100.0f;
+
             xQueueSend(fila_para_calculo, &pct, 0);
         }
     }
@@ -161,19 +181,50 @@ void Task_RMS(void *pvParameters){
 
 // ESTEIRA PARTE 2: Recebe os dados brutos e anexa as conversões reais na mesma struct
 void Task_calculoVreal(void *pvParameters) {
-    telemetria_trifasica_t pct_processando;
+    telemetria_trifasica_t pct;
 
     while(1) {
-        if (xQueueReceive(fila_para_calculo, &pct_processando, portMAX_DELAY) == pdPASS) {
-            pct_processando.tr1 = VReal_tensao(pct_processando.t1);
-            pct_processando.tr2 = VReal_tensao(pct_processando.t2);
-            pct_processando.tr3 = VReal_tensao(pct_processando.t3);
-            pct_processando.cr1 = VReal_corrente(pct_processando.c1);
-            pct_processando.cr2 = VReal_corrente(pct_processando.c2);
-            pct_processando.cr3 = VReal_corrente(pct_processando.c3);
+        if (xQueueReceive(fila_para_calculo, &pct, portMAX_DELAY) == pdPASS) {
+            // 1. Calcula as Tensões e Correntes Reais usando suas funções
+            pct.tr1 = VReal_tensao(pct.t1);
+            pct.tr2 = VReal_tensao(pct.t2);
+            pct.tr3 = VReal_tensao(pct.t3);
+            pct.cr1 = VReal_corrente(pct.c1);
+            pct.cr2 = VReal_corrente(pct.c2);
+            pct.cr3 = VReal_corrente(pct.c3);
             
-            // Envia o pacote completo finalizado para a Task de Bluetooth
-            xQueueSend(fila_para_bluetooth, &pct_processando, 0);
+            // 2. Calcula a Potência Ativa Real (W)
+            // Como P_bruta = V_bruta * I_bruta, a P_real usa o produto dos fatores multiplicativos das suas duas funções
+            // Fator_V = 879.719f  | Fator_I = 145.161f (Baseado nas simplificações anteriores)
+            float fator_potencia_ativa = 879.719f * 145.161f;
+            pct.pr1 = pct.p1_bruta * fator_potencia_ativa;
+            pct.pr2 = pct.p2_bruta * fator_potencia_ativa;
+            pct.pr3 = pct.p3_bruta * fator_potencia_ativa;
+
+            // 3. Calcula a Potência Aparente Real (S = V_real * I_real) em VA
+            pct.sr1 = pct.tr1 * pct.cr1;
+            pct.sr2 = pct.tr2 * pct.cr2;
+            pct.sr3 = pct.tr3 * pct.cr3;
+
+            // 4. Calcula o Fator de Potência Real (FP = P / S)
+            // Evita divisão por zero caso a bancada esteja desligada (S = 0)
+            pct.fp1 = (pct.sr1 > 0.1f) ? (pct.pr1 / pct.sr1) : 0.0f;
+            pct.fp2 = (pct.sr2 > 0.1f) ? (pct.pr2 / pct.sr2) : 0.0f;
+            pct.fp3 = (pct.sr3 > 0.1f) ? (pct.pr3 / pct.sr3) : 0.0f;
+
+            // Filtro de segurança matemática: FP não pode fisicamente passar de 1.0 devido a ruídos
+            if (pct.fp1 > 1.0f) pct.fp1 = 1.0f;
+            if (pct.fp2 > 1.0f) pct.fp2 = 1.0f;
+            if (pct.fp3 > 1.0f) pct.fp3 = 1.0f;
+
+            // 5. Calcula a Potência Reativa Real (Q = sqrt(S^2 - P^2)) em VAr
+            // Usa fmaxf para garantir que a subtração nunca seja negativa por erro de arredondamento de float
+            pct.qr1 = sqrtf(fmaxf(0.0f, (pct.sr1 * pct.sr1) - (pct.pr1 * pct.pr1)));
+            pct.qr2 = sqrtf(fmaxf(0.0f, (pct.sr2 * pct.sr2) - (pct.pr2 * pct.pr2)));
+            pct.qr3 = sqrtf(fmaxf(0.0f, (pct.sr3 * pct.sr3) - (pct.pr3 * pct.pr3)));
+
+            // Envia o pacote completo e consolidado de uma vez só para o Bluetooth!
+            xQueueSend(fila_para_bluetooth, &pct, 0);
         }
     }
 }
@@ -181,7 +232,7 @@ void Task_calculoVreal(void *pvParameters) {
 // ESTEIRA PARTE 3: Lê o pacote consolidado e transmite de forma controlada a cada 250ms
 void Task_Bluetooth(void *pvParameters) {
     telemetria_trifasica_t dados_enviar;
-    char buffer_texto[256];
+    char buffer_texto[512]; 
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     esp_bt_controller_init(&bt_cfg);
@@ -192,25 +243,37 @@ void Task_Bluetooth(void *pvParameters) {
     esp_spp_init(ESP_SPP_MODE_CB);
 
     while(1) {
-        // Agora lê apenas UMA única fila de forma limpa e síncrona
         if (xQueueReceive(fila_para_bluetooth, &dados_enviar, portMAX_DELAY) == pdPASS) {
             if (bt_conn_handle != 0) {
                 memset(buffer_texto, 0, sizeof(buffer_texto));
 
+                // Agora exibe o bloco BRUTO (leitura do ADC) e o bloco REAL (mundo físico + potências)
                 int len = snprintf(buffer_texto, sizeof(buffer_texto),
-                    "C1: %.2f | C2: %.2f | C3: %.2f | T1: %.2f | T2: %.2f | T3: %.2f\r\n"
-                    "CR1: %.2f | CR2: %.2f | CR3: %.2f | TR1: %.2f | TR2: %.2f | TR3: %.2f\r\n",
-                    dados_enviar.c1, dados_enviar.c2, dados_enviar.c3,
+                    "\r\n==================== DADOS BRUTOS (ADC) ====================\r\n"
+                    "T1_ADC: %.1f mV | T2_ADC: %.1f mV | T3_ADC: %.1f mV\r\n"
+                    "C1_ADC: %.1f mV | C2_ADC: %.1f mV | C3_ADC: %.1f mV\r\n"
+                    "==================== VALORES REAIS E POTENCIAS ====================\r\n"
+                    "FASE 1 -> U: %.1f V | I: %.2f A | P: %.1f W | Q: %.1f VAr | S: %.1f VA | FP: %.2f\r\n"
+                    "FASE 2 -> U: %.1f V | I: %.2f A | P: %.1f W | Q: %.1f VAr | S: %.1f VA | FP: %.2f\r\n"
+                    "FASE 3 -> U: %.1f V | I: %.2f A | P: %.1f W | Q: %.1f VAr | S: %.1f VA | FP: %.2f\r\n",
+                    
+                    // Dados Brutos (Originais da Task_RMS)
                     dados_enviar.t1, dados_enviar.t2, dados_enviar.t3,
-                    dados_enviar.cr1, dados_enviar.cr2, dados_enviar.cr3,
-                    dados_enviar.tr1, dados_enviar.tr2, dados_enviar.tr3);
+                    dados_enviar.c1, dados_enviar.c2, dados_enviar.c3,
+                    
+                    // Valores Reais (Fase 1)
+                    dados_enviar.tr1, dados_enviar.cr1, dados_enviar.pr1, dados_enviar.qr1, dados_enviar.sr1, dados_enviar.fp1,
+                    // Valores Reais (Fase 2)
+                    dados_enviar.tr2, dados_enviar.cr2, dados_enviar.pr2, dados_enviar.qr2, dados_enviar.sr2, dados_enviar.fp2,
+                    // Valores Reais (Fase 3)
+                    dados_enviar.tr3, dados_enviar.cr3, dados_enviar.pr3, dados_enviar.qr3, dados_enviar.sr3, dados_enviar.fp3
+                );
 
                 if (len > 0 && len < sizeof(buffer_texto)) {
                     esp_spp_write(bt_conn_handle, len, (uint8_t *)buffer_texto);
                 }
             }
         }
-        // Esse delay agora funciona perfeitamente, controlando a poluição visual do terminal do note
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
