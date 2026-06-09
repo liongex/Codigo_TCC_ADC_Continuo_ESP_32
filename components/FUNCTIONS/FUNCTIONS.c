@@ -27,9 +27,9 @@ float rms(float*dados, int tamanho){
 
 float VReal_tensao(float Vrms) {
     // 22.951219 * 38.33 = 879.719
-    return Vrms * 879.719f; 
+    return (Vrms * 879.719f)/1000; 
 }
 
 float VReal_corrente(float Irms) {
-    return Irms * 145.161f;
+    return (Irms * 145.161f);
 }
