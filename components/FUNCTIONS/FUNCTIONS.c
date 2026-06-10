@@ -31,5 +31,5 @@ float VReal_tensao(float Vrms) {
 }
 
 float VReal_corrente(float Irms) {
-    return (Irms * 145.161f);
+    return (Irms * 145.161f)/1000;
 }
