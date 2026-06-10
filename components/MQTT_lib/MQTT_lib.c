@@ -1,10 +1,12 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
 #include "esp_log.h"
 #include "mqtt_client.h"
+#include "esp_tls.h"       // 💡 O PULO DO GATO: Adicione este include aqui!
 #include "MQTT_lib.h"
 
 static const char *TAG = "Biblioteca MQTT";
@@ -52,18 +54,49 @@ static void mqtt_event_handler(void *event_handler_arg, esp_event_base_t event_b
     }    
 }
 
+#if USE_MQTT_TLS_PSK
+// Converte a chave hexadecimal string do usuário para bytes puros em memória
+static const uint8_t psk_key_bytes[] = { 0xAB, 0xCD, 0x44, 0xEF, 0x12, 0x34, 0x56, 0x78 };
+
+// 💡 CORREÇÃO: No ESP-IDF v5.x o membro correto é 'key_size'
+static const struct psk_key_hint psk_config_bancada = {
+    .key = psk_key_bytes,
+    .key_size = sizeof(psk_key_bytes), 
+    .hint = "isac" 
+};
+#endif
 void mqtt_start(void){
 
-    status_mqtt_event_group = xEventGroupCreate(); //
-    
-    // Configuração com suporte para credenciais básicas e porta dinâmica
+    status_mqtt_event_group = xEventGroupCreate();
+
+    #if USE_MQTT_TLS_PSK
+    // =========================================================================
+    // CONFIGURAÇÃO MODO SEGURO: MQTTS via TLS-PSK (Porta 8844)
+    // =========================================================================
     esp_mqtt_client_config_t esp_mqtt_client_cfg = {
-        .network.disable_auto_reconnect = false, //
-        .broker.address.uri = "mqtt://192.168.0.9", // IP do seu Debian 13
-        .broker.address.port = 1844,                  // Porta parametrizada
-        .credentials.username = "isac",               // Usuário autorizado
-        .credentials.authentication.password = "isac", // Senha autorizada
-        .session.keepalive = 10, //
+        .network.disable_auto_reconnect = false,
+        .broker.address.uri = "mqtts://192.168.0.9", 
+        .broker.address.port = 8844,
+        .broker.verification.psk_hint_key = &psk_config_bancada, 
+        .session.keepalive = 10,
+        .session.last_will = {
+            .topic = "casa/temp",
+            .msg = "{\"status\":\"Offline por Falha Critica\"}",
+            .msg_len = strlen("{\"status\":\"Offline por Falha Critica\"}"),
+            .retain = 0
+        }
+    };
+    #else
+    // =========================================================================
+    // CONFIGURAÇÃO MODO CONVENCIONAL: TCP Puro com Autenticação Simples (Porta 1844)
+    // =========================================================================
+    esp_mqtt_client_config_t esp_mqtt_client_cfg = {
+        .network.disable_auto_reconnect = false,
+        .broker.address.uri = "mqtt://192.168.0.155", 
+        .broker.address.port = 1844,
+        .credentials.username = "isac",
+        .credentials.authentication.password = "isac",
+        .session.keepalive = 10,
         .session.last_will = {
             .topic = "casa/temp",
             .msg = "{\"status\":\"Offline\"}",
@@ -71,13 +104,20 @@ void mqtt_start(void){
             .retain = 0
         }
     };
+    #endif
 
-    client = esp_mqtt_client_init(&esp_mqtt_client_cfg); 
+    client = esp_mqtt_client_init(&esp_mqtt_client_cfg);
 
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL); 
-    esp_mqtt_client_start(client); 
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
 
-    ESP_LOGI(TAG, "Cliente MQTT inicializado com sucesso.");
+    #if USE_MQTT_TLS_PSK
+    // Renderizado como texto simples para evitar LaTeX desnecessário
+    ESP_LOGI(TAG, "Conexao iniciada em MODO SEGURO (MQTTS via TLS-PSK) na porta 8844.");
+    #else
+    // Renderizado como texto simples para evitar LaTeX desnecessário
+    ESP_LOGI(TAG, "Conexao iniciada em MODO CONVENCIONAL (TCP / User-Pass) na porta 1844.");
+    #endif
 }
 
 void mqtt_subscribe(char *topic, int qos){
