@@ -54,30 +54,30 @@ static void mqtt_event_handler(void *event_handler_arg, esp_event_base_t event_b
 
 void mqtt_start(void){
 
-    status_mqtt_event_group = xEventGroupCreate();
-    //Configuração da estrutura do cliente MQTT
+    status_mqtt_event_group = xEventGroupCreate(); //
+    
+    // Configuração com suporte para credenciais básicas e porta dinâmica
     esp_mqtt_client_config_t esp_mqtt_client_cfg = {
-        .network.disable_auto_reconnect = false,                    // Habilitar reconexão 
-        .broker.address.uri = "mqtt://mqtt.eclipseprojects.io",
-        .broker.address.port = 1883,
-        .session.keepalive = 10,                                    // Padrão é 120 segundos
+        .network.disable_auto_reconnect = false, //
+        .broker.address.uri = "mqtt://192.168.0.9", // IP do seu Debian 13
+        .broker.address.port = 1844,                  // Porta parametrizada
+        .credentials.username = "isac",               // Usuário autorizado
+        .credentials.authentication.password = "isac", // Senha autorizada
+        .session.keepalive = 10, //
         .session.last_will = {
-            .topic = "ELE0629/Weather/Status",
-            .msg = "ADEUS",
-            .msg_len = strlen("Offline"),
+            .topic = "casa/temp",
+            .msg = "{\"status\":\"Offline\"}",
+            .msg_len = strlen("{\"status\":\"Offline\"}"),
             .retain = 0
         }
     };
 
-    client = esp_mqtt_client_init(&esp_mqtt_client_cfg);
+    client = esp_mqtt_client_init(&esp_mqtt_client_cfg); 
 
-    //Event handler para conexão MQTT
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    esp_mqtt_client_start(client);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL); 
+    esp_mqtt_client_start(client); 
 
-    //Primeira mensagem: enviar para UFRN/Lab/status o valor Online
-    ESP_LOGI(TAG, "Primeira publicação. Setando Online!");
-    mqtt_publish("ELE0629/Weather/Status", "Online", 0, 0);
+    ESP_LOGI(TAG, "Cliente MQTT inicializado com sucesso.");
 }
 
 void mqtt_subscribe(char *topic, int qos){

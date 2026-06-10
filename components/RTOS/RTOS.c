@@ -7,24 +7,26 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
-#include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_gap_bt_api.h"
-#include "esp_bt_device.h"  
-#include "esp_spp_api.h"
 #include "nvs_flash.h"      
 
+// Inclusão dos seus dois componentes e interfaces nativas
+#include "wifi.h"       // Seu componente de rede Wi-Fi
+#include "MQTT_lib.h"   // Seu componente de mensageria MQTT
 #include "RTOS.h"
 
-#define SPP_SERVER_NAME "ESP32_RMS_SERVER"
-#define DEVICE_NAME "ESP32_Bancada_Trifasica"
+// Definições de Rede do seu ambiente Debian 13
+#define MQTT_BROKER_URI   "mqtt://192.168.0.9"
+#define MQTT_BROKER_PORT  1844
+#define MQTT_USERNAME     "isac"
+#define MQTT_PASSWORD     "isac"
+#define MQTT_TOPIC        "casa/temp"
 
 // ESTRUTURA UNIFICADA: Passa todas as informações de uma vez só, evitando loops de filas
 typedef struct {
     // Valores brutos calculados no RMS
     float t1, t2, t3;
     float c1, c2, c3;
-    float p1_bruta, p2_bruta, p3_bruta; // Novas: Potências ativas brutas
+    float p1_bruta, p2_bruta, p3_bruta; // Potências ativas brutas
 
     // Valores reais convertidos pela calibração física
     float tr1, tr2, tr3;
@@ -39,39 +41,16 @@ static adc_channel_t channel[6] = {ADC_CHANNEL_0, ADC_CHANNEL_3, ADC_CHANNEL_4, 
 
 static QueueHandle_t fila_dados;
 static QueueHandle_t fila_para_calculo; // Da Task_RMS para a Task_calculoVreal
-static QueueHandle_t fila_para_bluetooth; // Da Task_calculoVreal para a Task_Bluetooth
+static QueueHandle_t fila_para_network; // Substituiu a fila_para_bluetooth de forma limpa
 
 static TaskHandle_t s_task_handle1 = NULL, s_task_handle2 = NULL, s_task_handle3 = NULL, s_task_handle4 = NULL;
 static const char *TAG_START = "INICIALIZADOR";
-static const char *TAG_BT    = "TAREFA_BT";
+static const char *TAG_NET   = "TAREFA_NETWORK";
 
 static dados dado = {0};
 
 static int TENSAO = 0;
-static int CORRENTE = 0;  
-static uint32_t bt_conn_handle = 0; 
-
-static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param) {
-    switch (event) {
-        case ESP_SPP_INIT_EVT:
-            esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_MASTER, 0, SPP_SERVER_NAME);
-            break;
-        case ESP_SPP_START_EVT:
-            esp_bt_gap_set_device_name(DEVICE_NAME);
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-            break;
-        case ESP_SPP_SRV_OPEN_EVT:
-            ESP_LOGI(TAG_BT, "Notebook Conectado com sucesso!");
-            bt_conn_handle = param->srv_open.handle;
-            break;
-        case ESP_SPP_CLOSE_EVT:
-            ESP_LOGI(TAG_BT, "Notebook Desconectado.");
-            bt_conn_handle = 0;
-            break;
-        default:
-            break;
-    }
-}
+static int CORRENTE = 0;
 
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data){
     BaseType_t mustYield = pdFALSE;
@@ -91,12 +70,11 @@ void Task_Adc(void *pvParameters){
 
     adc_continuous_evt_cbs_t cbs = {
         .on_conv_done = s_conv_done_cb,
-        .on_pool_ovf = s_pool_ovf_cb, 
+        .on_pool_ovf = s_pool_ovf_cb,
     };
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
     ESP_ERROR_CHECK(adc_continuous_start(handle));
 
-    // Variável local para isolamento e cópia segura por valor
     dados dados_locais;
 
     while(1){
@@ -111,7 +89,7 @@ void Task_Adc(void *pvParameters){
                 break;
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(1)); // Alívio para o escalonador
+        vTaskDelay(pdMS_TO_TICKS(1)); 
     }
 }
 
@@ -120,7 +98,6 @@ void Task_RMS(void *pvParameters){
     adc_cali_handle_t adc1_cali_handle = NULL;
     bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_2_5, &adc1_cali_handle);
 
-    // Arrays static alocadas fora da Stack para impedir o Stack Overflow
     static float local_corrente1[100];
     static float local_corrente2[100];
     static float local_corrente3[100];
@@ -129,7 +106,7 @@ void Task_RMS(void *pvParameters){
     static float local_tensao3[100];
 
     while(1){
-        int j = 0, k = 0, n = 0, m = 0, v = 0, b = 0; 
+        int j = 0, k = 0, n = 0, m = 0, v = 0, b = 0;
 
         if (xQueueReceive(fila_dados, &recebido, portMAX_DELAY) == pdPASS){
             
@@ -166,7 +143,6 @@ void Task_RMS(void *pvParameters){
 
             telemetria_trifasica_t pct;
 
-            // 1. Extrai a componente contínua (Média/Offset DC) de cada canal analógico
             float dc_c1 = media(local_corrente1, 100);
             float dc_c2 = media(local_corrente2, 100);
             float dc_c3 = media(local_corrente3, 100);
@@ -174,7 +150,6 @@ void Task_RMS(void *pvParameters){
             float dc_t2 = media(local_tensao2, 100);
             float dc_t3 = media(local_tensao3, 100);
 
-            // 2. Calcula os valores RMS (a função rms() internamente usará essas médias)
             pct.c1 = rms(local_corrente1, 100);
             pct.c2 = rms(local_corrente2, 100);
             pct.c3 = rms(local_corrente3, 100);
@@ -182,7 +157,6 @@ void Task_RMS(void *pvParameters){
             pct.t2 = rms(local_tensao2, 100);
             pct.t3 = rms(local_tensao3, 100);
 
-            // 3. CORREÇÃO DA POTÊNCIA ATIVA: Subtrai o offset DC de cada amostra antes do produto escalar
             float soma_p1 = 0, soma_p2 = 0, soma_p3 = 0;
             for(int i = 0; i < 100; i++) {
                 soma_p1 += (local_tensao1[i] - dc_t1) * (local_corrente1[i] - dc_c1);
@@ -190,7 +164,6 @@ void Task_RMS(void *pvParameters){
                 soma_p3 += (local_tensao3[i] - dc_t3) * (local_corrente3[i] - dc_c3);
             }
             
-            // Seu divisor de 10^8 perfeitamente validado para conversão dimensional para Watts
             pct.p1_bruta = soma_p1 / 100000000.0f;
             pct.p2_bruta = soma_p2 / 100000000.0f;
             pct.p3_bruta = soma_p3 / 100000000.0f;
@@ -234,54 +207,33 @@ void Task_calculoVreal(void *pvParameters) {
             pct.qr2 = sqrtf(fmaxf(0.0f, (pct.sr2 * pct.sr2) - (pct.pr2 * pct.pr2)));
             pct.qr3 = sqrtf(fmaxf(0.0f, (pct.sr3 * pct.sr3) - (pct.pr3 * pct.pr3)));
 
-            // Timeout de 10ms para evitar sobrecarga assíncrona na fila do Bluetooth
-            xQueueSend(fila_para_bluetooth, &pct, pdMS_TO_TICKS(10));
+            // Envia para a nova fila de rede com timeout protetivo de 10ms
+            xQueueSend(fila_para_network, &pct, pdMS_TO_TICKS(10));
         }
     }
 }
 
-void Task_Bluetooth(void *pvParameters) {
+// 🌐 NOVA TAREFA: Substituiu o Bluetooth para postar em JSON no Debian 13
+void Task_NetworkTransmit(void *pvParameters) {
     telemetria_trifasica_t dados_enviar;
-    char buffer_texto[1024]; // Expandido para 1024 bytes (Fim do Bug IllegalInstruction)
-    bool mensagem_inicial_enviada = false;
-
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    esp_bt_controller_init(&bt_cfg);
-    esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-    esp_bluedroid_init();
-    esp_bluedroid_enable();
-    esp_spp_register_callback(esp_spp_cb);
-    esp_spp_init(ESP_SPP_MODE_CB);
+    char json_buffer[1024]; 
 
     while(1) {
-        // Sinal Anti-Sniff para travar a economia de energia do Windows
-        if (bt_conn_handle != 0 && !mensagem_inicial_enviada) {
-            char* texto_inicial = "\r\n==================================================\r\n"
-                                  "--- CONEXAO ESTABELECIDA COM SUCESSO ---\r\n"
-                                  "AGUARDANDO PRIMEIRAS LEITURAS DO ADC...\r\n"
-                                  "==================================================\r\n";
-            esp_spp_write(bt_conn_handle, strlen(texto_inicial), (uint8_t *)texto_inicial);
-            mensagem_inicial_enviada = true; 
-        }
-
-        if (bt_conn_handle == 0) {
-            mensagem_inicial_enviada = false;
-        }
-
-        if (xQueueReceive(fila_para_bluetooth, &dados_enviar, portMAX_DELAY) == pdPASS) {
+        if (xQueueReceive(fila_para_network, &dados_enviar, portMAX_DELAY) == pdPASS) {
             
-            if (bt_conn_handle != 0) {
-                memset(buffer_texto, 0, sizeof(buffer_texto));
+            // Só executa o envio se o seu componente acusar conexão ativa com o Broker
+            if (mqtt_connected()) {
+                memset(json_buffer, 0, sizeof(json_buffer));
 
-                int len = snprintf(buffer_texto, sizeof(buffer_texto),
-                    "\r\n==================== DADOS BRUTOS (ADC) ====================\r\n"
-                    "T1_ADC: %.1f mV | T2_ADC: %.1f mV | T3_ADC: %.1f mV\r\n"
-                    "C1_ADC: %.1f mV | C2_ADC: %.1f mV | C3_ADC: %.1f mV\r\n"
-                    "==================== VALORES REAIS E POTENCIAS ====================\r\n"
-                    "FASE 1 -> U: %.1f V | I: %.2f A | P: %.1f W | Q: %.1f VAr | S: %.1f VA | FP: %.3f\r\n"
-                    "FASE 2 -> U: %.1f V | I: %.2f A | P: %.1f W | Q: %.1f VAr | S: %.1f VA | FP: %.3f\r\n"
-                    "FASE 3 -> U: %.1f V | I: %.2f A | P: %.1f W | Q: %.1f VAr | S: %.1f VA | FP: %.3f\r\n",
-                    
+                // Montagem do payload estruturado em JSON estruturado para o Dashboard ler
+                int len = snprintf(json_buffer, sizeof(json_buffer),
+                    "{"
+                    "\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f,"
+                    "\"c1\":%.1f,\"c2\":%.1f,\"c3\":%.1f,"
+                    "\"tr1\":%.1f,\"cr1\":%.2f,\"pr1\":%.1f,\"qr1\":%.1f,\"sr1\":%.1f,\"fp1\":%.3f,"
+                    "\"tr2\":%.1f,\"cr2\":%.2f,\"pr2\":%.1f,\"qr2\":%.1f,\"sr2\":%.1f,\"fp2\":%.3f,"
+                    "\"tr3\":%.1f,\"cr3\":%.2f,\"pr3\":%.1f,\"qr3\":%.1f,\"sr3\":%.1f,\"fp3\":%.3f"
+                    "}",
                     dados_enviar.t1, dados_enviar.t2, dados_enviar.t3,
                     dados_enviar.c1, dados_enviar.c2, dados_enviar.c3,
                     
@@ -290,12 +242,15 @@ void Task_Bluetooth(void *pvParameters) {
                     dados_enviar.tr3, dados_enviar.cr3, dados_enviar.pr3, dados_enviar.qr3, dados_enviar.sr3, dados_enviar.fp3
                 );
 
-                if (len > 0 && len < sizeof(buffer_texto)) {
-                    esp_spp_write(bt_conn_handle, len, (uint8_t *)buffer_texto);
+                if (len > 0 && len < sizeof(json_buffer)) {
+                    // Publica diretamente no tópico casa/temp usando sua biblioteca
+                    mqtt_publish(MQTT_TOPIC, json_buffer, 0, 0);
                 }
+            } else {
+                ESP_LOGW(TAG_NET, "Aviso: Dados prontos, mas MQTT desconectado do Debian.");
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(100)); // Cadência controlada de transmissão via RF
+        vTaskDelay(pdMS_TO_TICKS(100)); // Cadência idêntica ao teste anterior
     }
 }
 
@@ -311,15 +266,23 @@ void Start(void){
 
     fila_dados = xQueueCreate(30, sizeof(dados));
     fila_para_calculo = xQueueCreate(30, sizeof(telemetria_trifasica_t));
-    fila_para_bluetooth = xQueueCreate(10, sizeof(telemetria_trifasica_t)); 
+    fila_para_network = xQueueCreate(10, sizeof(telemetria_trifasica_t)); 
 
-    if (fila_dados == NULL || fila_para_calculo == NULL || fila_para_bluetooth == NULL) {
+    if (fila_dados == NULL || fila_para_calculo == NULL || fila_para_network == NULL) {
         ESP_LOGE(TAG_START, "Erro crítico: Falha ao criar as Filas em RAM!");
         return;
     }
 
+    // 🌐 Inicialização Sequencial dos seus componentes de Rede
+    ESP_LOGI(TAG_START, "Conectando ao ponto de acesso Wi-Fi local...");
+    wifi_init_sta(); // Bloqueia a execução até conseguir o IP da rede local
+
+    ESP_LOGI(TAG_START, "Inicializando cliente MQTT para o Broker Debian 13...");
+    mqtt_start(); // Dispara o cliente MQTT assíncrono em background
+
+    // Alocação das tarefas nos núcleos do processador Dual Core
     xTaskCreatePinnedToCore(Task_Adc, "TarefaNoCore1", 4096, NULL, 2, &s_task_handle1, 1);
     xTaskCreatePinnedToCore(Task_RMS, "TarefaNoCore0", 4096, NULL, 2, &s_task_handle2, 0);
-    xTaskCreatePinnedToCore(Task_calculoVreal, "TarefaCalculo", 2048, NULL, 2, &s_task_handle4, 0); // Expandido para segurança da matemática float
-    xTaskCreatePinnedToCore(Task_Bluetooth, "TarefaBT", 4096, NULL, 1, &s_task_handle3, 0); 
+    xTaskCreatePinnedToCore(Task_calculoVreal, "TarefaCalculo", 2048, NULL, 2, &s_task_handle4, 0);
+    xTaskCreatePinnedToCore(Task_NetworkTransmit, "TarefaNet", 4096, NULL, 1, &s_task_handle3, 0); 
 }
