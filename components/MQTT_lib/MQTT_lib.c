@@ -91,7 +91,7 @@ void mqtt_start(void){
     // =========================================================================
     esp_mqtt_client_config_t esp_mqtt_client_cfg = {
         .network.disable_auto_reconnect = false,
-        .broker.address.uri = "mqtt://192.168.0.155", 
+        .broker.address.uri = "mqtt://192.168.0.9", 
         .broker.address.port = 1844,
         .credentials.username = "isac",
         .credentials.authentication.password = "isac",
