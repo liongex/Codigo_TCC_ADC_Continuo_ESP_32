@@ -213,7 +213,6 @@ void Task_calculoVreal(void *pvParameters) {
     }
 }
 
-// 🌐 NOVA TAREFA: Substituiu o Bluetooth para postar em JSON no Debian 13
 void Task_NetworkTransmit(void *pvParameters) {
     telemetria_trifasica_t dados_enviar;
     char json_buffer[1024]; 
@@ -273,7 +272,7 @@ void Start(void){
         return;
     }
 
-    // 🌐 Inicialização Sequencial dos seus componentes de Rede
+    //  Inicialização Sequencial dos componentes de Rede
     ESP_LOGI(TAG_START, "Conectando ao ponto de acesso Wi-Fi local...");
     wifi_init_sta(); // Bloqueia a execução até conseguir o IP da rede local
 

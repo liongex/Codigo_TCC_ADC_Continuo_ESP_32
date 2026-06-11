@@ -6,7 +6,7 @@
 
 #include "esp_log.h"
 #include "mqtt_client.h"
-#include "esp_tls.h"       // 💡 O PULO DO GATO: Adicione este include aqui!
+#include "esp_tls.h"  
 #include "MQTT_lib.h"
 
 static const char *TAG = "Biblioteca MQTT";
