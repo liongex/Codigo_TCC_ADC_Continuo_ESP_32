@@ -58,7 +58,6 @@ static void mqtt_event_handler(void *event_handler_arg, esp_event_base_t event_b
 // Converte a chave hexadecimal string do usuário para bytes puros em memória
 static const uint8_t psk_key_bytes[] = { 0xAB, 0xCD, 0x44, 0xEF, 0x12, 0x34, 0x56, 0x78 };
 
-// 💡 CORREÇÃO: No ESP-IDF v5.x o membro correto é 'key_size'
 static const struct psk_key_hint psk_config_bancada = {
     .key = psk_key_bytes,
     .key_size = sizeof(psk_key_bytes), 
